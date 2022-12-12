@@ -3,6 +3,7 @@
 import { PuppeteerExtraPlugin } from 'puppeteer-extra-plugin';
 import type { Browser, Page } from 'puppeteer';
 import { createProxyMiddleware, RequestHandler } from 'http-proxy-middleware';
+import Server, { createProxyServer } from 'http-proxy';
 import urlJoin from 'url-join';
 import * as types from './types';
 
@@ -20,7 +21,7 @@ const getPageTargetId = (page: Page): string => {
 export class PuppeteerExtraPluginPortal extends PuppeteerExtraPlugin {
   private webPortalBaseWSPath?: string;
 
-  private targetIdProxyMap: Map<string, RequestHandler> = new Map();
+  private targetIdProxyMap: Map<string, Server> = new Map();
 
   constructor(opts?: Partial<types.PluginOptions>) {
     super(opts);
@@ -38,7 +39,7 @@ export class PuppeteerExtraPluginPortal extends PuppeteerExtraPlugin {
     };
   }
 
-  public async getPortalProxy(page: Page): Promise<RequestHandler | undefined> {
+  public async getPortalProxy(page: Page): Promise<Server | undefined> {
     const targetId = getPageTargetId(page);
     const proxyMiddleware = this.targetIdProxyMap.get(targetId);
     return proxyMiddleware;
@@ -67,22 +68,28 @@ export class PuppeteerExtraPluginPortal extends PuppeteerExtraPlugin {
       `/ws/${params.targetId}`
     );
     this.debug('open portal', wsUrl, targetId, proxyURL);
-    const wsProxy = createProxyMiddleware(proxyURL, {
+    const wsProxy = createProxyServer({
       target: params.wsUrl,
-      logLevel: this.debug.enabled ? 'debug' : 'silent',
-      logProvider: () => {
-        const subLogger = this.debug.extend('http-proxy-middleware');
-        return {
-          log: subLogger,
-          debug: subLogger,
-          error: subLogger,
-          info: subLogger,
-          warn: subLogger,
-        };
-      },
       ws: true,
       changeOrigin: true,
     });
+
+    // const wsProxy = createProxyMiddleware(proxyURL, {
+    //   target: params.wsUrl,
+    //   logLevel: this.debug.enabled ? 'debug' : 'silent',
+    //   logProvider: () => {
+    //     const subLogger = this.debug.extend('http-proxy-middleware');
+    //     return {
+    //       log: subLogger,
+    //       debug: subLogger,
+    //       error: subLogger,
+    //       info: subLogger,
+    //       warn: subLogger,
+    //     };
+    //   },
+    //   ws: true,
+    //   changeOrigin: true,
+    // });
     this.targetIdProxyMap.set(params.targetId, wsProxy);
   }
 
