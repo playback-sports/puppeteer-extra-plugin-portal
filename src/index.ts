@@ -1,11 +1,9 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion */
 /* eslint-disable class-methods-use-this */
 import { PuppeteerExtraPlugin } from 'puppeteer-extra-plugin';
-
 import type { Browser, Page } from 'puppeteer';
-import { URL } from 'url';
+import Server, { createProxyServer } from 'http-proxy';
 import * as types from './types';
-import { PortalServer } from './server';
 
 export * from './types';
 
@@ -19,20 +17,11 @@ const getPageTargetId = (page: Page): string => {
  * @noInheritDoc
  */
 export class PuppeteerExtraPluginPortal extends PuppeteerExtraPlugin {
-  private webPortalBaseUrl: URL;
-
-  private portalServer: PortalServer;
+  private targetIdProxyMap: Map<string, Server> = new Map();
 
   constructor(opts?: Partial<types.PluginOptions>) {
     super(opts);
     this.debug('Initialized', this.opts);
-    this.webPortalBaseUrl = new URL((this.opts as types.PluginOptions).webPortalConfig!.baseUrl!);
-    this.portalServer = new PortalServer({
-      debug: this.debug,
-      webPortalBaseUrl: this.webPortalBaseUrl,
-      listenOpts: (this.opts as types.PluginOptions).webPortalConfig?.listenOpts,
-      serverOpts: (this.opts as types.PluginOptions).webPortalConfig?.serverOpts,
-    });
   }
 
   public get name(): string {
@@ -40,62 +29,41 @@ export class PuppeteerExtraPluginPortal extends PuppeteerExtraPlugin {
   }
 
   public get defaults(): types.PluginOptions {
-    return {
-      webPortalConfig: {
-        listenOpts: {
-          port: 3000,
-        },
-        baseUrl: 'http://localhost:3000',
-      },
-    };
+    return {};
   }
 
-  public async openPortal(page: Page): Promise<string> {
+  public async getPortalProxy(page: Page): Promise<Server | undefined> {
     const targetId = getPageTargetId(page);
-    const browser = page.browser();
-    const wsUrl = browser.wsEndpoint();
-    const url = await this.portalServer.hostPortal({
-      wsUrl,
-      targetId,
-    });
-    return url;
-  }
-
-  public async closePortal(page: Page): Promise<void> {
-    const targetId = getPageTargetId(page);
-    await this.portalServer.closePortal(targetId);
-  }
-
-  public hasOpenPortal(page: Page): boolean {
-    const targetId = getPageTargetId(page);
-    return this.portalServer.hasOpenPortal(targetId);
-  }
-
-  private async closeAllBrowserPortals(browser: Browser) {
-    this.debug('Closing all portals for browser');
-    const pages = await browser.pages();
-    const closePortalPromises = pages.map(this.closePortal.bind(this));
-    await Promise.all(closePortalPromises);
+    const proxyMiddleware = this.targetIdProxyMap.get(targetId);
+    return proxyMiddleware;
   }
 
   private addCustomMethods(prop: Page) {
     /* eslint-disable no-param-reassign */
-    prop.openPortal = async () => this.openPortal(prop);
-    prop.closePortal = async () => this.closePortal(prop);
-    prop.hasOpenPortal = () => this.hasOpenPortal(prop);
+    prop.getPortalProxy = async () => this.getPortalProxy(prop);
   }
 
   async onPageCreated(page: Page): Promise<void> {
-    this.debug('onPageCreated', page.url());
     this.addCustomMethods(page);
-    page.on('close', () => this.closePortal(page));
+
+    const targetId = getPageTargetId(page);
+    const browser = page.browser();
+    const wsUrl = browser.wsEndpoint();
+
+    const wsProxy = createProxyServer({
+      target: wsUrl,
+      ws: true,
+      changeOrigin: true,
+    });
+    this.debug('ws proxy created', wsUrl);
+
+    this.targetIdProxyMap.set(targetId, wsProxy);
   }
 
   /** Add additions to already existing pages  */
   async onBrowser(browser: Browser): Promise<void> {
     const pages = await browser.pages();
     pages.forEach((page) => this.addCustomMethods(page));
-    browser.on('disconnected', () => this.closeAllBrowserPortals(browser));
   }
 }
 
